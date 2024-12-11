@@ -1,0 +1,11 @@
+# ./scripts/tiler.py --in LineSlat --out Temp --spec tilespecs --delta 0 20
+# LED1 R1 R7  R13 Q1 CLIP1 CLIP7
+# LED2 R2 R8  R14 Q2 CLIP2 CLIP8
+# LED3 R3 R9  R15 Q3 CLIP3 CLIP9
+# LED4 R4 R10 R16 Q4 CLIP4 CLIP10
+# LED5 R5 R11 R17 Q5 CLIP5 CLIP11
+# LED6 R6 R12 R18 Q6 CLIP6 CLIP12
+
+#./scripts/tiler.py --in LineSlat --out Temp --spec tilespecs --delta 40 0
+J5 R32 R33 R34 U1 C4
+J6 R38 R39 R40 U2 C5

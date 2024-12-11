@@ -1,0 +1,225 @@
+#!/usr/bin/env kicad_python
+import os
+import sys
+import argparse
+import shutil
+import re
+import pcbnew
+
+def str_point(obj):
+    x = obj.x/1e6;
+    y = obj.y/1e6;
+    return f"({x},{y})"
+
+def str_orient(obj):
+    degrees = obj.AsDegrees()
+    return f"{degrees}"
+
+def str_track(obj):
+    if obj.Type() == pcbnew.PCB_TRACE_T:
+        start = obj.GetStart()
+        end = obj.GetEnd()
+        width = obj.GetWidth()/1e6
+        layer = obj.GetLayer()
+        net = obj.GetNetname()
+        return f"TRACK({start=} {end=} {width=} {layer=} {net=})"
+    elif obj.Type() == pcbnew.PCB_VIA_T:
+        pos = obj.GetStart()
+        net = obj.GetNetname()
+        return f"VIA({pos=} {net=})"
+    else:
+        assert False
+
+def str_box(obj):
+    if obj.IsValid():
+        return f"BOX({obj.GetLeft()/1e6:6.2f},{obj.GetTop()/1e6:6.2f},{obj.GetRight()/1e6:6.2f},{obj.GetBottom()/1e6:6.2f})"
+    else:
+        return "BOX(INVALID)"
+
+def str_pad(obj):
+    net = obj.GetNetname()
+    num = obj.GetNumber()
+    return f"PAD({num=} {net=})"
+
+def str_footprint(obj):
+    ref = obj.GetReference()
+    pos = obj.GetPosition()
+    orient = obj.GetOrientation()
+    value = obj.GetValue()
+    return f"FOOTPRINT({ref=} {pos=} {orient=} {value=})"
+
+def str_via(obj):
+    loc = obj.GetPosition()
+    size = obj.GetWidth()/1e6
+    drill = obj.GetDrill()/1e6
+    layers = (obj.TopLayer(), obj.BottomLayer())
+    net = obj.GetNetname()
+    return "VIA(at:{}, size:{}, drill:{}, layers:{}, net:{})".format(loc, size, drill, layers, net)
+# pcbnew.VIA.__str__ = str_via
+pcbnew.PCB_TRACK.__str__ = str_track
+pcbnew.PCB_TRACK.__repr__ = str_track
+pcbnew.BOX2I.__str__ = str_box
+pcbnew.BOX2I.__repr__ = str_box
+pcbnew.VECTOR2I.__str__ = str_point
+pcbnew.VECTOR2I.__repr__ = str_point
+pcbnew.FOOTPRINT.__str__ = str_footprint
+pcbnew.FOOTPRINT.__repr__ = str_footprint
+pcbnew.PAD.__str__ = str_pad
+pcbnew.PAD.__repr__ = str_pad
+pcbnew.EDA_ANGLE.__str__ = str_orient
+pcbnew.EDA_ANGLE.__repr__ = str_orient
+
+def read_specs(pcb, specfile):
+    '''Each line in specfile is a list of reference names.
+    The first line is used as the template and each
+    other line is placed with the same relative positions.
+    Every line must have the same number of references.
+    Blank lines and lines starting with '#' are ignored.
+    '''
+    result = []
+    numnames = None
+    for line in open(specfile):
+        line = line.strip()
+        if line == "" or line[0] == '#':
+            continue
+        refnames = line.split()
+        if numnames is None:
+            numnames = len(refnames)
+        else:
+            assert(numnames == len(refnames))
+        footprints = []
+        for refname in refnames:
+            footprint = pcb.FindFootprintByReference(refname)
+            assert footprint is not None
+            footprints.append(footprint)
+        result.append(footprints)
+    return result
+
+def get_footprint_box(footprint):
+    include_visible_text = False
+    include_invisible_text = False
+    return footprint.GetBoundingBox(include_visible_text, include_invisible_text)
+
+def get_source_box(footprints):
+    merged_box = pcbnew.BOX2I()
+    for footprint in footprints:
+        merged_box.Merge(get_footprint_box(footprint))
+    return merged_box
+
+def find_tracks_in_source_box(pcb, src_box):
+    tracks = []
+    for track in pcb.Tracks():
+        if track.GetBoundingBox().Intersects(src_box):
+            tracks.append(track)
+    return tracks
+
+def make_pin2net(footprint):
+    pin2net = {}
+    # print(f"make_pin2net({footprint})")
+    for pad in footprint.Pads():
+        name = pad.GetNumber()
+        net = pad.GetNetname()
+        if name == '' and net == '':
+            continue
+        # print(f"{name=} {net=}")
+        assert name not in pin2net
+        pin2net[name] = pad.GetNetname()
+    return pin2net
+
+def update_netmap(src_footprint, dst_footprint, netmap):
+    pin2net1 = make_pin2net(src_footprint)
+    pin2net2 = make_pin2net(dst_footprint)
+    assert len(pin2net1) == len(pin2net2)
+    for pinname in pin2net1.keys():
+        net1 = pin2net1[pinname]
+        net2 = pin2net2[pinname]
+        if net1 not in netmap:
+            netmap[net1] = net2
+        assert net2 == netmap[net1]
+
+def get_netname_maps(src_object_set, dst_object_sets):
+    netmaps = []
+    for piecenum, src_footprint in enumerate(src_object_set):
+        for copysetnum, dst_object_set in enumerate(dst_object_sets):
+            if copysetnum >= len(netmaps):
+                netmaps.append({})
+            netmap = netmaps[copysetnum]
+            dst_footprint = dst_object_set[piecenum]
+            update_netmap(src_footprint, dst_footprint, netmap)
+    return netmaps
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--inboard", required=True)
+    parser.add_argument("--outboard", required=True)
+    parser.add_argument("--specfile", required=True)
+    parser.add_argument("--delta", nargs=2, type=float, required=True)
+    args = parser.parse_args()
+
+    ipath = "{}.kicad_pcb".format(args.inboard)
+    opath = "{}.kicad_pcb".format(args.outboard)
+    pcb = pcbnew.LoadBoard(ipath)
+
+    # data[0][...] is used to position/draw/etc data[1][...] etc
+    data = read_specs(pcb, args.specfile)
+    src_object_set = data[0]
+    dst_object_sets = data[1:]
+
+    dx, dy = [int(1e6 * float(i)) for i in args.delta]
+    deltas = []
+    for i in range(len(dst_object_sets)):
+        deltas.append(pcbnew.VECTOR2I(dx * (i + 1), dy * (i + 1)))
+
+
+    src_box = get_source_box(src_object_set)
+    netmaps = get_netname_maps(src_object_set, dst_object_sets)
+    # for i, netmap in enumerate(netmaps):
+        # print(f"netmap {i}: {sorted(netmap.items())}")
+    # move footprints
+    for piecenum, src_footprint in enumerate(src_object_set):
+        for copysetnum, dst_object_set in enumerate(dst_object_sets):
+            delta = deltas[copysetnum]
+            dst_footprint = dst_object_set[piecenum]
+            pos = src_footprint.GetPosition()
+            pos += delta
+            dst_footprint.SetPosition(pos)
+            dst_footprint.SetOrientation(src_footprint.GetOrientation())
+            # fix text on footprint
+            for src_field in src_footprint.Fields():
+                dst_field = dst_footprint.GetFieldByName(src_field.GetName())
+                dst_field.SetFPRelativePosition(src_field.GetFPRelativePosition())
+                dst_field.SetTextAngle(src_field.GetTextAngle())
+                dst_field.SetVisible(src_field.IsVisible())
+                dst_field.SetLayer(src_field.GetLayer())
+                dst_field.SetHorizJustify(src_field.GetHorizJustify())
+                dst_field.SetVertJustify(src_field.GetVertJustify())
+    # copy tracks
+    src_tracks = find_tracks_in_source_box(pcb, src_box)
+    for copysetnum in range(len(dst_object_sets)):
+        netmap = netmaps[copysetnum]
+        delta = deltas[copysetnum]
+        for src_track in src_tracks:
+            pos = src_track.GetPosition()
+            pos += delta
+
+            src_netname = src_track.GetNetname()
+            dst_netname = netmap[src_netname]
+            dst_net = pcb.FindNet(dst_netname)
+            assert dst_net is not None
+
+            dst_track = src_track.Duplicate().Cast();
+            dst_track.SetNet(dst_net)
+            if src_track.Type() == pcbnew.PCB_VIA_T:
+                dst_track.SetPosition(src_track.GetPosition() + delta)
+            elif src_track.Type() == pcbnew.PCB_TRACE_T:
+                dst_track.SetStart(src_track.GetStart() + delta)
+                dst_track.SetEnd(src_track.GetEnd() + delta)
+            else:
+                assert 0, "OOPS! {}".format(type(dst_track))
+            # print(f"added: {dst_track}")
+            pcb.Add(dst_track)
+    pcb.Save(opath)
+
+if __name__ == "__main__":
+    main()
+    sys.exit(0)
