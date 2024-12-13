@@ -8698,7 +8698,7 @@
 				)
 			)
 		)
-		(property "Value" "SD103CW"
+		(property "Value" "BAT54W"
 			(at 0 2.1 90)
 			(layer "F.Fab")
 			(hide yes)
@@ -8749,7 +8749,7 @@
 				)
 			)
 		)
-		(property "Mouser Part Number" "78-SD103CW-HE3_A-08 "
+		(property "Mouser Part Number" "78-BAT54W-HG3-18 "
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -26386,7 +26386,7 @@
 				)
 			)
 		)
-		(property "Value" "SD103CW"
+		(property "Value" "BAT54W"
 			(at 0 2.1 90)
 			(layer "F.Fab")
 			(hide yes)
@@ -26437,7 +26437,7 @@
 				)
 			)
 		)
-		(property "Mouser Part Number" "78-SD103CW-HE3_A-08 "
+		(property "Mouser Part Number" "78-BAT54W-HG3-18 "
 			(at 0 0 -90)
 			(unlocked yes)
 			(layer "F.Fab")
