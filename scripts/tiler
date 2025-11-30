@@ -129,6 +129,15 @@ def make_pin2net(footprint):
 def update_netmap(src_footprint, dst_footprint, netmap):
     pin2net1 = make_pin2net(src_footprint)
     pin2net2 = make_pin2net(dst_footprint)
+
+    # debug prints
+    if False:
+        print(f"update_netmap for {src_footprint.GetReference()} -> {dst_footprint.GetReference()}:")
+        for pin, net in pin2net1.items():
+            print(f"  src pin {pin} -> net {net}")
+        for pin, net in pin2net2.items():
+            print(f"  dst pin {pin} -> net {net}", flush=True)
+
     assert len(pin2net1) == len(pin2net2)
     for pinname in pin2net1.keys():
         net1 = pin2net1[pinname]
@@ -185,7 +194,7 @@ def main():
             dst_footprint.SetPosition(pos)
             dst_footprint.SetOrientation(src_footprint.GetOrientation())
             # fix text on footprint
-            for src_field in src_footprint.Fields():
+            for src_field in src_footprint.GetFields():
                 dst_field = dst_footprint.GetFieldByName(src_field.GetName())
                 dst_field.SetFPRelativePosition(src_field.GetFPRelativePosition())
                 dst_field.SetTextAngle(src_field.GetTextAngle())
