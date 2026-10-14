@@ -7,7 +7,10 @@ This is an ARM Cortex M0 board with:
 * 8 Pairs of PyroClips (8 cues per station)
 * 2 RJ45 connectors for daisy-chaining (power & serial comm)
 * 915MHz Hope RFM95 Lora module (only populated in the master station)
+* Powered by 18V external LiPo battery pack (master station only, slave stations are powered by the master station)
 * OLED display
+
+Note: this board can also be used as an 8 cue standalone fireworks controller.
 
 ![PCB](v2.0/LineSlat.png)
 
