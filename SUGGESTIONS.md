@@ -82,7 +82,7 @@ A slave's fire current (5–9 A) comes from the master's battery over +BAT and G
   | 470 µF | 165–330 ms | 240–480 ms |
 
   That covers a good match, which opens in 10–20 ms, but not a full 100 ms pulse. A single dud match anywhere in the chain keeps the cable low for 100 ms. Measure the real 3V3 current with the OLED lit to confirm these numbers.
-  - **Firmware (v2.0):** end each pulse as soon as the match burns open, and keep the 3V3 load low during a fire. **(spec)**
+  - **Firmware (v2.0):** keep the 3V3 load low during a fire. **(spec)**
   - **Firmware:** staggering fires by unit index (for example 20 ms per unit), so only one board's fire current is on the cable at a time, was considered and dropped (2026-10-22). The 4 + 3 setup at 10 ft per link has enough margin without it. If the redesign needs it, each unit must forward the fire command down the chain before any unit fires, because fires corrupt RS-485 traffic.
   - **Hardware:** make C1 470 µF, rated 35 V. D2 already keeps the cable from draining it.
 - **Match energy on far boards.** Far boards get well under 1 A from the cable, so C2/C3 must light the match nearly alone. They discharge through D6, R37, the shunt and the FET (about 2.2 Ω plus a diode drop), so a 1.5 Ω match gets only about 40% of their energy. 200 µF at 16 V gives the match about 6 A²·ms. The bench test in `Ematch2_v1/ematch_cap_test.txt` (200 µF at 9 V across the match) gives about 5 A²·ms, so the margin is small. Test-fire matches through a board's real fire path from C2/C3 alone, with the cable supply removed.
