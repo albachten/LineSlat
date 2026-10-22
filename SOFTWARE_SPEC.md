@@ -237,7 +237,7 @@ Firing needs two independent switches, the high-side switch and a cue's low-side
 9. **D9 high only with cue pins low.** Set D9 high only when all cue pins are low, at the start of a fire or for an arm check. Never set D9 high during a continuity test.
 10. **Watchdog.** Enable the WDT with a timeout of about 1 s. A reset leaves all pins high-impedance, which turns Q1–Q8 and Q10 off.
 11. **Brown-out.** Enable BOD33 at about 2.9 V. 3V3 is regulated, but on a far board in a chain the cable voltage can fall below what U5 needs (about 6 V at +BAT, after D2 and D3) while every unit fires. U5 then runs only from C1 (100 µF behind D2). From 16 V, C1 holds U5 up for about 70 ms at a 40 mA 3V3 load and about 35 ms at 80 mA. To keep that margin:
-    - Keep the 3V3 load low during a fire: do not refresh the OLED and do not transmit on RS-485 or the radio.
+    - Keep the 3V3 load low during a fire: do not refresh the OLED and do not transmit on RS-485 (see §5.6 of the radio protocol in the pyro repo). The radio acknowledgement may still go during the fire: only the chain's master has a radio, and it runs from its own battery, so its 3V3 doesn't depend on the cable.
     - If a board browns out during a fire, it resets and its cue pins go low, which ends the pulse. Rule 4 then applies.
 12. **Clean up after firing.** After every fire, or any fault such as a command timeout or radio or serial error, drive all cue pins low first, then D9, so the low-side FET breaks the current.
 
