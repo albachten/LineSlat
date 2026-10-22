@@ -40,6 +40,7 @@ In the off or safe position, each switch connects its output to a bleeder resist
 - A0 (PA02) reads +18V through a 1M / 100K divider: +18V = 11 × V(A0). Battery ≈ +18V + 0.8 V, which is the S3A drop of D2.
 - +18V is at most about 20.2 V, so A0 never exceeds 1.84 V. 3V3 is regulated, so the default VDDANA reference (3.3 V full scale) is accurate enough. At 12 bits, one count is about 8.9 mV of battery voltage.
 - AREF (PA03) has only a 1 µF capacitor (C8), so it cannot serve as an external reference.
+- The divider's source impedance is about 91 kΩ and A0 has no filter capacitor, so use a long ADC sample time. The Arduino SAMD core sets SAMPCTRL to its maximum (63) in `init()`. Keep that value if the firmware changes the ADC setup.
 - The battery can be measured whenever SW1 is on, whether the board is armed or not. With SW1 off, A0 reads 0 V.
 - Sample at least once per second while idle, and report the result with every status message. A 5S pack is full at 21.0 V, nominal at 18 V and empty at about 15 V. Report it as low below 16.5 V (3.3 V per cell).
 
@@ -48,12 +49,13 @@ In the off or safe position, each switch connects its output to a bleeder resist
 V_ARM has no ADC input. Firmware checks the armed state with the INA219 instead:
 
 1. Make sure all eight cue pins are low.
-2. Set D9_FIRE high. The high-side switch connects V_ARM to ECOMMON, the common (red) clips. No current flows because every low-side FET is off.
-3. Wait about 2 ms. This covers Q9 turn-on and one full INA219 shunt-plus-bus conversion.
-4. Read the INA219 bus voltage, which is ECOMMON to GND.
+2. **High-side fault check.** With D9_FIRE still low, read the INA219 bus voltage. It must read below 5 V (about 2.9 V). A higher reading means Q9 or Q10 has failed short and V_ARM is already on ECOMMON. Report a high-side fault and refuse all fires and continuity tests until the board is power-cycled. Do not set D9_FIRE high.
+3. Set D9_FIRE high. The high-side switch connects V_ARM to ECOMMON, the common (red) clips. No current flows because every low-side FET is off.
+4. Wait about 2 ms. This covers Q9 turn-on and one full INA219 shunt-plus-bus conversion.
+5. Read the INA219 bus voltage, which is ECOMMON to GND.
    - **Armed:** about V_ARM − 1 V, so 14 to 20 V.
    - **Safe:** about 2.9 V, fed from 3V3 through D8 and R31.
-5. Treat the board as armed above 10 V and as safe below 5 V. Between those values, report the state as unknown and refuse to fire.
+6. Treat the board as armed above 10 V and as safe below 5 V. Between those values, report the state as unknown and refuse to fire.
 
 This check is part of every fire (see [Firing](#firing)). Firmware may also run it every few seconds while idle to report arm status. If it does, it must set D9_FIRE low again as soon as the reading is taken.
 
@@ -62,9 +64,11 @@ This check is part of every fire (see [Firing](#firing)). Firmware may also run 
 Each cue is fired by two switches in series. D9 drives the shared high-side switch: Q10 (NPN) turns on Q9 (PMOS). Current then flows from V_ARM through D6, R37 (2 Ω 5 W) and the shunt R51 to ECOMMON. Each cue select pin drives one low-side FET (Q1–Q8), which switches that cue's black clip (L1–L8). All select pins and D9 are active high. Neither switch can fire a cue alone.
 
 1. Check that the command is valid for this board and cue.
-2. Set D9_FIRE high and run the [arm check](#arm-check). If the board is not armed, set D9_FIRE low and refuse the command.
-3. Set the cue's select pin high for exactly 100 ms. That way the low-side NMOS FET switches the fire current, not the PMOS. E-matches light in 10–20 ms at 1 A.
+2. Run the [arm check](#arm-check), which ends with D9_FIRE high. If the high-side fault check fails or the board is not armed, set D9_FIRE low and refuse the command.
+3. Set the cue's select pin high for up to 100 ms. That way the low-side NMOS FET switches the fire current, not the PMOS. E-matches light in 10–20 ms at 1 A.
 4. While firing, read the INA219 shunt voltage about every 1 ms. The current at a full battery is about (V_ARM − 1 V) ÷ (2.1 Ω + match resistance), which is around 5 A. Firmware does not need to measure it exactly. It only records whether any sample exceeded 1 A, which is 100 mV on the shunt.
+   - **Shorted cue.** Also read the bus voltage, which is the voltage across the match and FET: about 0.6 V into a short and 5 V or more into a real match. If the shunt reading is saturated and the bus voltage is still below 2 V after 20 ms, end the pulse early and report the cue as shorted. This keeps Q1–Q9 and R37 from carrying about 9 A for the full 100 ms.
+   - **Match burned open.** After any sample has exceeded 1 A, end the pulse as soon as three samples in a row read below 100 mA (a shunt reading under 1000) with the bus voltage above 2 V. That is more than 20 Ω, so the match has burned open. Do not use the current alone: on a far board in a chain the cable may supply well under 1 A to an intact match once C2/C3 have discharged, but the bus voltage then stays below 2 V. Ending the pulse here matters more than saving heat in R37. Every unit fires the same cue at once and draws its fire current over the cable, so the cable voltage at the far boards stays low until the last match in the chain stops drawing current. The 3V3 regulator on a far board may then run only from C1, which holds it up for roughly 35–70 ms, not the full 100 ms (see rule 11 in [Safety requirements](#safety-requirements)).
 5. Set the select pin low, then D9_FIRE low.
 6. Report the fire as good if the current exceeded 1 A, and as failed otherwise.
 
@@ -72,12 +76,18 @@ The shunt reading saturates at 3.2 A with the setup below. This is expected, bec
 
 ### Continuity test
 
+Before each continuity test, run the high-side fault check (step 2 of the [arm check](#arm-check)) with D9_FIRE low. If it fails, refuse the test. A failed-short Q9 puts V_ARM on ECOMMON, and a continuity test on an armed board would then fire the cue.
+
 With D9_FIRE low, setting one cue's select pin high routes a small test current through that cue's match: 3V3 → D8 → R31 (150 Ω) → shunt R51 → ECOMMON → match → low-side FET.
 
 - The test current is about 19 mA through a good match and near 0 mA through an open one. The matches' no-fire current is at least 200 mA, so the test cannot fire them.
 - The INA219 shunt current shows whether the cue is open or closed. Its bus voltage (IN− to GND) is the voltage across the match and FET, so match resistance ≈ bus voltage ÷ current. The bus voltage LSB is 4 mV, so this resistance estimate is coarse.
-- Test one cue at a time. Keep the select pin on only as long as the measurement needs, for example 10 ms.
-- The continuity test works in both the safe and armed states, because D9 stays low.
+- **Low resistance (suspected short).** The test current makes one bus voltage count about 0.21 Ω. A dead short at the clips reads 0–1 counts (FET, traces and clips add about 0.15 Ω), and a 1.0–2.0 Ω match reads about 5–10 counts. Take five bus voltage readings, use the median, and compute R = bus voltage ÷ shunt current. A closed cue below about 0.6 Ω (3 counts) is LOW.
+  - Show LOW only on that station's OLED. Everywhere else, including radio and RS-485 reports, treat it as a good cue. The cue still fires normally, and the shorted-cue cutoff during [firing](#firing) still applies.
+  - 0.6 Ω is a starting value. Confirm it on the bench with the clips shorted (it should read 0–1 counts) and with a few real matches, and lower it for low-resistance matches.
+  - A short at the far end of a long firing lead can read like a low-resistance match, so this check mainly catches touching clips or a crushed match.
+- Test one cue at a time. Keep the select pin on only as long as the measurement needs, for example 10 ms, which leaves time for the five bus voltage readings.
+- The continuity test works in both the safe and armed states, because D9 stays low, provided the high-side fault check passes.
 
 ### Master and slave role
 
@@ -106,6 +116,8 @@ Each board has two independent half-duplex RS-485 ports. Each one is a point-to-
 - **TX enable.** The enable pin drives both DE and ~RE. High enables the driver and turns off the receiver. Low returns to receive. Before setting it low, call `flush()`. In the SAMD core this waits until the last stop bit has been shifted out.
 - **RX while sending.** RO is high-impedance while transmitting, so the RX pin floats. Enable the RX pin's internal pull-up, or discard anything received while the enable pin is high.
 - **Idle bus.** The THVD1400 has receiver fail-safe, so an idle, open or shorted bus reads as idle (logic 1). The board has no bias resistors.
+- **Supported chain.** v2.0 boards support up to 8 stations with the master in the middle: 4 slaves on one side and 3 on the other, with at most 10 ft (3 m) of cable per link. With every board firing at once, the far board's +BAT stays above about 8.5 V even with a nearly empty 16 V battery. That keeps U5 in regulation without help from C1, and the far match still gets about 2 A. Longer chains or links, or a master at one end, need the redesign in SUGGESTIONS.md §2.1.
+- **Errors during fires.** A slave's fire current returns to the master's battery over the cable GND, which shifts the ground between boards by several volts per link (about 0.84 Ω per 30 m of Cat5, so about 4 V at 5 A). Expect corrupted or lost messages during and just after a fire. The serial protocol must use a checksum and retries.
 - **Speed.** The THVD1400 supports up to 500 kbps. The baud rate and message format are defined in the serial protocol document.
 - **Setup.** The LineSlat variant does not create either UART, so the firmware must create both:
 
@@ -177,11 +189,11 @@ These pins have net labels but connect to nothing: D13 (PA17), D27 USBHOSTEN (PA
 
 ## I2C bus
 
-One I2C bus (Wire, SERCOM3, SDA on D20 and SCL on D21) connects the INA219 and the OLED. The bus has 10K pull-ups to 3V3. Run it at 400 kHz, which both devices support. Even at that speed, a full OLED refresh takes about 13 ms, so do not refresh the OLED during a fire.
+One I2C bus (Wire, SERCOM3, SDA on D20 and SCL on D21) connects the INA219 and the OLED. The bus has 10K pull-ups to 3V3. Run it at 400 kHz, which both devices support. Even at that speed, a full OLED refresh (1024 bytes) takes about 25 ms, so do not refresh the OLED during a fire.
 
 | Address (7-bit) | Device | Notes |
 | --- | --- | --- |
-| 0x3C | OLED display (DISP1), SSD1306 0.91 in 128×32 module | |
+| 0x3C | OLED display (DISP1), SSD1306 128×64 module | |
 | 0x40 | INA219B current monitor (U6) | A0 and A1 both tied to GND |
 
 DISP1 pinout: 1 GND, 2 VCC (3V3), 3 SCL, 4 SDA.
@@ -215,13 +227,26 @@ The RadioHead RH_RF95 driver works with this pinout: `RH_RF95 rf95(5, 3);`, afte
 
 Firing needs two independent switches, the high-side switch and a cue's low-side switch, plus the physical ARM switch. Firmware must never be the only thing preventing a fire.
 
-1. **Safe outputs at boot.** The first lines of `setup()` set D9 and all eight cue pins (D6, D7, D8, D17, D18, D19, A1, A2) as outputs driven low, before any other setup. All switches stay off until then: Q1–Q8 have 1M gate pull-downs, and Q10 (a bipolar transistor) needs base current, which the MCU's reset-state input pins don't supply.
+1. **Safe outputs at boot.** The first lines of `setup()` set D9 and all eight cue pins (D6, D7, D8, D17, D18, D19, A1, A2) as outputs driven low, before any other setup. All switches stay off until then: Q1–Q8 have 1M gate pull-downs, and Q10 has a 10K base-emitter pull-down (see [Board modifications](#board-modifications)). Without that resistor, D9's only load is LED9 and R30, which draw almost nothing below about 1.6 V, so pin leakage could partly turn on Q10 and Q9 while the MCU is in reset.
 2. **Fire only when armed.** Refuse every fire command unless the [arm check](#arm-check) reads ECOMMON above 10 V immediately before the cue pin is set high.
-3. **Valid commands only.** Act only on a fire command addressed to this board and cue. Discard duplicates and stale commands, using a sequence number or a timestamp.
-4. **100 ms fire pulse.** Each cue's select pin is high for 100 ms, and never longer. At a full battery R37 dissipates about 50 W while a match is firing, and about 170 W into a shorted cue, against its 5 W rating. Use a hardware timer or a loop based on `millis()`, never a delay that an interrupt or a radio handler could stretch.
-5. **At most one fire per second.** A 100 ms fire at about 50 W puts an average of about 5 W into R37 at one fire per second, which is its rating. Normal shows leave tens of seconds between cues, so this limit is never reached in practice. Firmware still enforces it: reject a fire that comes less than 1 s after the previous fire on the same board.
-6. **One cue at a time.** All eight cues share R37 and the shunt. Firing two at once splits the current and may not light either match.
-7. **D9 high only with cue pins low.** Set D9 high only when all cue pins are low, at the start of a fire or for an arm check. Never set D9 high during a continuity test.
-8. **Watchdog.** Enable the WDT with a timeout of about 1 s. A reset leaves all pins high-impedance, which turns Q1–Q8 and Q10 off.
-9. **Brown-out.** Enable BOD33 at about 2.9 V. 3V3 is regulated, so it only sags if the battery or USB supply fails.
-10. **Clean up after firing.** After every fire, or any fault such as a command timeout or radio or serial error, drive all cue pins low first, then D9, so the low-side FET breaks the current.
+3. **High-side fault lockout.** Before every arm check and continuity test, check that ECOMMON is below 5 V with D9 low. If it is not, Q9 or Q10 has failed short: refuse all fires and continuity tests until the board is power-cycled, and report the fault.
+4. **No firing straight after a reset.** After any reset, refuse fires until the controller has synced and armed the board again; this follows from the radio protocol, because the session and arm state are lost. There is no power-on lockout that needs the arm key cycled: a brown-out from the fire current or a loose connector would otherwise leave boards unable to fire until someone walks out to them. Report the reset cause (`PM->RCAUSE`). See `docs/reset_behavior.md` in the pyro repo.
+5. **Valid commands only.** Act only on a fire command addressed to this board and cue. Discard duplicates and stale commands, using a sequence number or a timestamp.
+6. **100 ms fire pulse.** Each cue's select pin is high for at most 100 ms. At a full battery R37 dissipates about 50 W while a match is firing, and about 170 W into a shorted cue, against its 5 W rating. End the pulse early into a shorted cue and as soon as the match burns open, as described in [Firing](#firing). Use a hardware timer or a loop based on `millis()`, never a delay that an interrupt or a radio handler could stretch.
+7. **Average of one fire per second, bursts of up to 8.** A 100 ms fire at about 50 W puts at most about 5 J into R37 (a dud match that never burns open; a good match opens in 10–20 ms, about 1 J). At one fire per second that averages about 5 W, which is R37's rating. Short bursts are within its short-time overload rating, so the firmware keeps a fire budget: up to 8 cues at once, refilling at one cue per second. A fire command that needs more cues than are left is refused whole, never delayed, because a cue that goes off seconds after the button press is a hazard. Normal shows never reach this limit. In a chain, the head checks the budget for every unit, since they all fire the same cues.
+8. **One cue at a time.** All eight cues share R37 and the shunt. Firing two at once splits the current and may not light either match.
+9. **D9 high only with cue pins low.** Set D9 high only when all cue pins are low, at the start of a fire or for an arm check. Never set D9 high during a continuity test.
+10. **Watchdog.** Enable the WDT with a timeout of about 1 s. A reset leaves all pins high-impedance, which turns Q1–Q8 and Q10 off.
+11. **Brown-out.** Enable BOD33 at about 2.9 V. 3V3 is regulated, but on a far board in a chain the cable voltage can fall below what U5 needs (about 6 V at +BAT, after D2 and D3) while every unit fires. U5 then runs only from C1 (100 µF behind D2). From 16 V, C1 holds U5 up for about 70 ms at a 40 mA 3V3 load and about 35 ms at 80 mA. To keep that margin:
+    - End each pulse when the match burns open (see [Firing](#firing)).
+    - Keep the 3V3 load low during a fire: do not refresh the OLED and do not transmit on RS-485 or the radio.
+    - If a board browns out during a fire, it resets and its cue pins go low, which ends the pulse. Rule 4 then applies.
+12. **Clean up after firing.** After every fire, or any fault such as a command timeout or radio or serial error, drive all cue pins low first, then D9, so the low-side FET breaks the current.
+
+## Board modifications
+
+Rev v2.0 boards need one rework before they are used:
+
+- **Q10 base pull-down.** Solder a 10K resistor (0603 or 0805) across Q10 pins 1 (base) and 2 (emitter, GND). This keeps the high-side switch off while D9 floats during reset and boot. To check it, arm the board, hold SW3 (RESET) and measure ECOMMON. It must read about 2.9 V, not V_ARM. The next revision will put this resistor on the schematic.
+
+The other proposed hardware changes for the next revision are listed in [SUGGESTIONS.md](SUGGESTIONS.md).
